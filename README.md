@@ -1,0 +1,1 @@
+# Trabalho-Pratico-01-Intelig-ncia-Artificial-
