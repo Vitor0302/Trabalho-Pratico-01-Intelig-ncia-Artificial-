@@ -6,7 +6,6 @@ import itertools
 import math
 import time
 import random
-import csv
 import os
 
 Estado = Tuple[int, int]
@@ -134,6 +133,41 @@ class LabirintoBusca:
                 else:
                     row.append(True)
             self.paredes.append(row)
+
+    @classmethod
+    def gerar_aleatorio(cls, largura: int = 31, altura: int = 15) -> 'LabirintoBusca':
+        if largura % 2 == 0:
+            largura += 1
+        if altura % 2 == 0:
+            altura += 1
+
+        grid = [['#'] * largura for _ in range(altura)]
+
+        def carve(r: int, c: int):
+            dirs = [(0, 2), (0, -2), (2, 0), (-2, 0)]
+            random.shuffle(dirs)
+            for dr, dc in dirs:
+                nr, nc = r + dr, c + dc
+                if 0 < nr < altura - 1 and 0 < nc < largura - 1 and grid[nr][nc] == '#':
+                    grid[r + dr // 2][c + dc // 2] = ' '
+                    grid[nr][nc] = ' '
+                    carve(nr, nc)
+
+        grid[1][1] = ' '
+        carve(1, 1)
+        grid[1][1] = 'A'
+        grid[altura - 2][largura - 2] = 'B'
+
+        import tempfile
+        conteudo = '\n'.join(''.join(row) for row in grid)
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+            f.write(conteudo)
+            tmp = f.name
+        try:
+            lab = cls(tmp)
+        finally:
+            os.unlink(tmp)
+        return lab
 
     def vizinhos(self, estado: Estado):
         linha, coluna = estado
@@ -745,17 +779,20 @@ class LabirintoBusca:
 
 def imprimir_labirinto(
     lab: LabirintoBusca,
-    resultado: Optional[ResultadoBusca] = None,
+    resultado=None,
     mostrar_explorados: bool = True,
     caminho_local: Optional[List[Estado]] = None
 ):
-
     if caminho_local is not None:
         caminho = set(caminho_local)
+        explorados: set = set()
+    elif isinstance(resultado, ResultadoBuscaOnline):
+        caminho = set(resultado.trajetoria) if resultado.encontrado else set()
+        explorados = set()
     else:
         caminho = set(resultado.caminho) if resultado and resultado.encontrado else set()
+        explorados = set(resultado.estados_explorados) if resultado and mostrar_explorados else set()
 
-    explorados = set(resultado.estados_explorados) if resultado and mostrar_explorados else set()
     coletas = set(lab.coletas)
 
     print()
@@ -845,40 +882,27 @@ def imprimir_resultado_local(lab: LabirintoBusca, resultado: ResultadoBuscaLocal
     plotar_curva_convergencia(resultado.curva_convergencia, resultado.algoritmo)
 
 
-def imprimir_labirinto_online(
-    lab: LabirintoBusca,
-    resultado: ResultadoBuscaOnline,
-    mostrar_mapa_interno: bool = False
-):
-    traj_set = set(resultado.trajetoria)
-    posicao_final = resultado.trajetoria[-1] if resultado.trajetoria else lab.inicio
+
+def imprimir_mapa_interno(lab: LabirintoBusca, resultado: ResultadoBuscaOnline):
     mapa = resultado.mapa_final_interno
+    traj_set = set(resultado.trajetoria)
+    coletas = set(lab.coletas)
 
     print()
     for i in range(lab.altura):
         for j in range(lab.largura):
             estado = (i, j)
-            if mostrar_mapa_interno:
-                celula = mapa[i][j]
-                if celula is None:
-                    print('?', end='')
-                    continue
-                if celula is True:
-                    print('#', end='')
-                    continue
-                # célula livre conhecida — cai no bloco abaixo
-            elif lab.paredes[i][j]:
+            celula = mapa[i][j]
+            if celula is None:
+                print('?', end='')
+            elif celula is True:
                 print('#', end='')
-                continue
-
-            if estado == lab.inicio:
+            elif estado == lab.inicio:
                 print('A', end='')
             elif estado == lab.objetivo:
                 print('B', end='')
-            elif estado in set(lab.coletas):
+            elif estado in coletas:
                 print('C', end='')
-            elif estado == posicao_final and not resultado.encontrado:
-                print('@', end='')
             elif estado in traj_set:
                 print('*', end='')
             else:
@@ -903,144 +927,121 @@ def imprimir_metricas_online(resultado: ResultadoBuscaOnline):
     print(f'Tempo de execução    : {resultado.tempo_execucao * 1000:.3f} ms')
 
 
-def bateria_online_csv(
-    lab: LabirintoBusca,
-    caminho_mapa: str,
-    raios: Optional[List[int]] = None
-) -> Dict[int, ResultadoBuscaOnline]:
-    """
-    Roda busca_online com múltiplos raios e salva métricas em CSV.
-    Retorna um dicionário {raio: ResultadoBuscaOnline} para reuso.
-    """
-    if raios is None:
-        raios = [1, 2, 3, 5]
-
-    os.makedirs('resultados', exist_ok=True)
-    nome_curto = os.path.splitext(os.path.basename(caminho_mapa))[0]
-    caminho_csv = f'resultados/busca_online_{nome_curto}.csv'
-
-    campos = [
-        'mapa', 'raio', 'encontrado',
-        'total_movimentos', 'custo_real', 'custo_otimo_offline',
-        'razao_online_offline', 'celulas_reveladas', 'celulas_revisitadas',
-        'num_replanejamentos', 'tempo_ms'
-    ]
-
-    resultados_por_raio: Dict[int, ResultadoBuscaOnline] = {}
-
-    with open(caminho_csv, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=campos)
-        writer.writeheader()
-
-        for r in raios:
-            print(f"\n--- Raio de percepção: {r} ---")
-            resultado = lab.busca_online(raio_percepcao=r)
-            imprimir_metricas_online(resultado)
-            resultados_por_raio[r] = resultado
-
-            writer.writerow({
-                'mapa': nome_curto,
-                'raio': r,
-                'encontrado': resultado.encontrado,
-                'total_movimentos': resultado.total_movimentos,
-                'custo_real': resultado.custo_real,
-                'custo_otimo_offline': resultado.custo_otimo_offline,
-                'razao_online_offline': round(resultado.razao_online_offline, 4),
-                'celulas_reveladas': resultado.celulas_reveladas,
-                'celulas_revisitadas': resultado.celulas_revisitadas,
-                'num_replanejamentos': resultado.num_replanejamentos,
-                'tempo_ms': round(resultado.tempo_execucao * 1000, 3),
-            })
-
-    print(f"\n[OK] Resultados salvos em: {caminho_csv}")
-    return resultados_por_raio
-
 
 def menu_principal():
-    lab = None
+    print('================================================================')
+    print('         Agente Inteligente em Labirinto        ')
+    print('================================================================')
+    print('Digite 1 caso queira colocar um caminho de labirinto via txt.')
+    print('Digite 2 caso queira fazer uma Busca Online com um labirinto desconhecido.')
 
-    while lab is None:
-        caminho_arquivo = input('Cole aqui o caminho do seu labirinto (OBS Sem aspas):').strip()
+    escolha_origem = input('\nEscolha sua opção [1 ou 2]: ').strip()
 
-        try:
-            lab = LabirintoBusca(caminho_arquivo)
-            print('\n[Sucesso] Labirinto carregado!')
-        except FileNotFoundError:
-            print('\n[Erro] Arquivo não encontrado. Verifique o caminho e tente novamente.')
-        except ValueError as e:
-            print(f'\n[Erro de Validação do Mapa] {e}')
-        except Exception as e:
-            print(f'\n[Erro Inesperado] {e}')
+    if escolha_origem == '2':
+        print('\n[MÁQUINA] Construindo um labirinto aleatório e desconhecido para o agente...')
+        lab = LabirintoBusca.gerar_aleatorio(largura=31, altura=15)
 
-    imprimir_labirinto(lab, resultado=None, mostrar_explorados=False)
+        print('\n[MÁQUINA] Print do Labirinto que foi criado (Apenas nós vemos as paredes):')
+        imprimir_labirinto(lab, resultado=None, mostrar_explorados=False)
 
-    print('─── Busca Clássica ───────────────────')
-    print('1 - Busca em Largura (BFS)')
-    print('2 - Busca em Profundidade (DFS)')
-    print('3 - Busca de Custo Uniforme (UCS)')
-    print('4 - Greedy Best-First Search')
-    print('5 - Weighted A*')
-    print('6 - IDA*')
-    print('7 - A* (Clássico)')
-    print('─── Busca Local ─────────────────────')
-    print('8 - Hill-Climbing (random-restart + sideways)')
-    print('9 - Simulated Annealing')
-    print('─── Busca Online ────────────────────')
-    print('10 - Busca Online (Replanning A*)')
-    print('────────────────────────────────────────────────')
+        print('\n[AGENTE] Iniciando exploração às cegas (Busca Online com Replanejamento)...')
+        resultado_online = lab.busca_online()
 
-    opcao = input('Digite a opção desejada [1-10]: ').strip()
-
-    if opcao in ('1', '2', '3', '4', '5', '6', '7'):
-        if opcao == '1':
-            resultado = lab.busca_largura()
-        elif opcao == '2':
-            resultado = lab.busca_profundidade()
-        elif opcao == '3':
-            resultado = lab.busca_custo_uniforme()
-        elif opcao == '4':
-            resultado = lab.busca_gulosa()
-        elif opcao == '5':
-            peso = float(input('Informe o peso w da Weighted A* (ex: 2.0): ').strip())
-            resultado = lab.busca_weighted_astar(peso=peso)
-        elif opcao == '6':
-            resultado = lab.busca_idastar()
-        elif opcao == '7':
-            resultado = lab.busca_astar()
-
-        print('\nSolução encontrada no labirinto:')
-        imprimir_labirinto(lab, resultado=resultado, mostrar_explorados=True)
-        imprimir_metricas(resultado)
-
-    elif opcao == '8':
-        if not lab.coletas:
-            print('\n[Aviso] O labirinto não tem pontos C. Carregue um mapa com pontos de coleta.')
-            return
-        n = int(input('Número de reinícios (padrão 20): ').strip() or '20')
-        s = int(input('Máximo de sideways consecutivos (padrão 10): ').strip() or '10')
-        resultado_local = lab.hill_climbing(num_reinicializacoes=n, max_sideways=s)
-        imprimir_resultado_local(lab, resultado_local)
-
-    elif opcao == '9':
-        if not lab.coletas:
-            print('\n[Aviso] O labirinto não tem pontos C. Carregue um mapa com pontos de coleta.')
-            return
-        e = int(input('Número de execuções independentes (padrão 5): ').strip() or '5')
-        a = float(input('Taxa de resfriamento alpha (padrão 0.995): ').strip() or '0.995')
-        resultado_local = lab.simulated_annealing(num_execucoes=e, alpha=a)
-        imprimir_resultado_local(lab, resultado_local)
-
-    elif opcao == '10':
-        r = int(input('Raio de percepção (padrão 1): ').strip() or '1')
-        resultado_online = lab.busca_online(raio_percepcao=r)
-        print('\nTrajetória percorrida (mapa real):')
-        imprimir_labirinto_online(lab, resultado_online, mostrar_mapa_interno=False)
-        print('Mapa interno final do agente:')
-        imprimir_labirinto_online(lab, resultado_online, mostrar_mapa_interno=True)
+        print('\n[AGENTE] Trajeto final percorrido até o objetivo:')
+        imprimir_labirinto(lab, resultado=resultado_online, mostrar_explorados=False)
+        print('Mapa interno final do agente (? = nunca visto):')
+        imprimir_mapa_interno(lab, resultado_online)
         imprimir_metricas_online(resultado_online)
+        return
+
+    elif escolha_origem == '1':
+        lab = None
+        caminho_arquivo = None
+
+        while lab is None:
+            caminho_arquivo = input('\nCole aqui o caminho do seu labirinto (OBS Sem aspas): ').strip()
+            try:
+                lab = LabirintoBusca(caminho_arquivo)
+                print('\n[Sucesso] Labirinto carregado!')
+            except FileNotFoundError:
+                print('\n[Erro] Arquivo não encontrado. Verifique o caminho e tente novamente.')
+            except ValueError as e:
+                print(f'\n[Erro de Validação do Mapa] {e}')
+            except Exception as e:
+                print(f'\n[Erro Inesperado] {e}')
+
+        imprimir_labirinto(lab, resultado=None, mostrar_explorados=False)
+
+        print('─── Busca Clássica ───────────────────')
+        print('1 - Busca em Largura (BFS)')
+        print('2 - Busca em Profundidade (DFS)')
+        print('3 - Busca de Custo Uniforme (UCS)')
+        print('4 - Greedy Best-First Search')
+        print('5 - Weighted A*')
+        print('6 - IDA*')
+        print('7 - A* (Clássico)')
+        print('─── Busca Local ─────────────────────')
+        print('8 - Hill-Climbing (random-restart + sideways)')
+        print('9 - Simulated Annealing')
+        print('─── Busca Online ────────────────────')
+        print('10 - Busca Online (Replanning com A*)')
+        print('─────────────────────────────────────')
+
+        opcao = input('Digite a opção desejada [1-10]: ').strip()
+
+        if opcao in ('1', '2', '3', '4', '5', '6', '7'):
+            if opcao == '1':
+                resultado = lab.busca_largura()
+            elif opcao == '2':
+                resultado = lab.busca_profundidade()
+            elif opcao == '3':
+                resultado = lab.busca_custo_uniforme()
+            elif opcao == '4':
+                resultado = lab.busca_gulosa()
+            elif opcao == '5':
+                peso = float(input('Informe o peso w da Weighted A* (ex: 2.0): ').strip())
+                resultado = lab.busca_weighted_astar(peso=peso)
+            elif opcao == '6':
+                resultado = lab.busca_idastar()
+            elif opcao == '7':
+                resultado = lab.busca_astar()
+
+            print('\nSolução encontrada no labirinto:')
+            imprimir_labirinto(lab, resultado=resultado, mostrar_explorados=True)
+            imprimir_metricas(resultado)
+
+        elif opcao == '8':
+            if not lab.coletas:
+                print('\n[Aviso] O labirinto não tem pontos C. Carregue um mapa com pontos de coleta.')
+                return
+            n = int(input('Número de reinícios (padrão 20): ').strip() or '20')
+            s = int(input('Máximo de sideways consecutivos (padrão 10): ').strip() or '10')
+            resultado_local = lab.hill_climbing(num_reinicializacoes=n, max_sideways=s)
+            imprimir_resultado_local(lab, resultado_local)
+
+        elif opcao == '9':
+            if not lab.coletas:
+                print('\n[Aviso] O labirinto não tem pontos C. Carregue um mapa com pontos de coleta.')
+                return
+            e = int(input('Número de execuções independentes (padrão 5): ').strip() or '5')
+            a = float(input('Taxa de resfriamento alpha (padrão 0.995): ').strip() or '0.995')
+            resultado_local = lab.simulated_annealing(num_execucoes=e, alpha=a)
+            imprimir_resultado_local(lab, resultado_local)
+
+        elif opcao == '10':
+            r = int(input('Raio de percepção (padrão 1): ').strip() or '1')
+            resultado_online = lab.busca_online(raio_percepcao=r)
+            print('\nTrajeto percorrido pelo agente:')
+            imprimir_labirinto(lab, resultado=resultado_online, mostrar_explorados=False)
+            print('Mapa interno final do agente (? = nunca visto):')
+            imprimir_mapa_interno(lab, resultado_online)
+            imprimir_metricas_online(resultado_online)
+
+        else:
+            print('\n[Erro] Opção inválida. Reinicie o programa.')
 
     else:
-        print('\n[Erro] Opção inválida. Reinicie o programa.')
+        print('\n[Erro] Opção de origem inválida. Encerrando.')
 
 
 if __name__ == '__main__':
