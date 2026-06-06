@@ -38,15 +38,14 @@ class ResultadoBusca:
 
     def calcular_j(
         self,
-        omega: float = 100.0,  # peso do bônus por encontrar a solução (completude)
-        alpha: float = 1.0,    # peso do custo do caminho percorrido (qualidade da rota)
-        beta:  float = 0.05,   # peso do número de nós expandidos (esforço computacional)
-        gamma: float = 1000.0, # peso do tempo de execução em segundos (velocidade)
-        theta: float = 0.1,    # peso do pico da fronteira (uso de memória)
-        eta:   float = 20.0    # peso da taxa de cobertura (eficiência de exploração do mapa)
+        omega: float = 100.0,  # peso do bônus por encontrar a solução
+        alpha: float = 1.0,    # peso do custo do caminho percorrido
+        beta:  float = 0.05,   # peso do número de nós expandidos
+        gamma: float = 1000.0, # peso do tempo de execução em segundos
+        theta: float = 0.1,    # peso do pico da fronteira
+        eta:   float = 20.0    # peso da taxa de cobertura
     ) -> float:
         sucesso = 1.0 if self.encontrado else 0.0
-        # taxa_cobertura: fração do mapa que o agente precisou explorar (0 = nada, 1 = tudo)
         taxa_cobertura = self.nos_explorados / max(self.celulas_livres, 1)
         return (
             + omega * sucesso
@@ -70,18 +69,33 @@ class ResultadoBuscaLocal:
     curva_convergencia: List[float]
     taxa_sucesso: float = 0.0
 
+@dataclass
+class ResultadoBuscaOnline:
+    sucesso: bool
+    caminho_percorrido: List[Estado]
+    movimentos_totais: int
+    custo_real: float
+    celulas_reveladas: int
+    celulas_revisitadas: int
+    num_replanejamentos: int
+    custo_offline: float
+    razao_online_offline: float
+
 
 class LabirintoBusca:
-    def __init__(self, filename: str):
-        with open(filename, encoding='utf-8') as f:
-            contents = f.read()
+    def __init__(self, filename: Optional[str] = None, mapa_str: Optional[str] = None):
+        if filename:
+            with open(filename, encoding='utf-8') as f:
+                contents = f.read()
+        elif mapa_str:
+            contents = mapa_str
+        else:
+            raise ValueError('Forneça um caminho de arquivo ou uma string de mapa.')
 
         if contents.count('A') != 1:
             raise ValueError('O labirinto deve ter exatamente um ponto inicial A.')
         if contents.count('B') != 1:
             raise ValueError('O labirinto deve ter exatamente um objetivo B.')
-        if contents.count('C') == 1:
-            raise ValueError("O labirinto deve conter pelo menos 1 ponto de coleta C.")
 
         linhas = contents.splitlines()
         self.altura = len(linhas)
@@ -113,6 +127,41 @@ class LabirintoBusca:
                     row.append(True)
             self.paredes.append(row)
 
+    @classmethod
+    def gerar_aleatorio(cls, largura: int = 31, altura: int = 15):
+        """Gerando um labirinto desconhecido para testar a Busca Online."""
+        if largura % 2 == 0: largura += 1
+        if altura % 2 == 0: altura += 1
+
+        grade = [['#' for _ in range(largura)] for _ in range(altura)]
+
+        def carve(r, c):
+            grade[r][c] = ' '
+            direcoes = [(0, 2), (0, -2), (2, 0), (-2, 0)]
+            random.shuffle(direcoes)
+            for dr, dc in direcoes:
+                nr, nc = r + dr, c + dc
+                if 1 <= nr < altura - 1 and 1 <= nc < largura - 1 and grade[nr][nc] == '#':
+                    grade[r + dr // 2][c + dc // 2] = ' '
+                    carve(nr, nc)
+
+        carve(1, 1)
+
+        grade[1][1] = 'A'
+        grade[altura - 2][largura - 2] = 'B'
+
+        espacos_vazios = [(r, c) for r in range(1, altura-1) for c in range(1, largura-1) 
+                          if grade[r][c] == ' ' and (r, c) not in [(1, 1), (altura-2, largura-2)]]
+        
+        for _ in range(random.randint(1, 4)):
+            if espacos_vazios:
+                r, c = random.choice(espacos_vazios)
+                grade[r][c] = 'C'
+                espacos_vazios.remove((r, c))
+
+        mapa_str = '\n'.join(''.join(linha) for linha in grade)
+        return cls(mapa_str=mapa_str)
+
     def vizinhos(self, estado: Estado):
         linha, coluna = estado
         candidatos = [
@@ -127,9 +176,9 @@ class LabirintoBusca:
                 resultado.append((acao, (l, c), 1.0))
         return resultado
 
-    def h(self, estado: Estado) -> float:
-        """Heurística de Manhattan para movimentos ortogonais com custo unitário."""
-        return abs(estado[0] - self.objetivo[0]) + abs(estado[1] - self.objetivo[1])
+    def h(self, estado: Estado, destino: Optional[Estado] = None) -> float:
+        destino = destino or self.objetivo
+        return abs(estado[0] - destino[0]) + abs(estado[1] - destino[1])
 
     @staticmethod
     def reconstruir(no: No):
@@ -143,6 +192,8 @@ class LabirintoBusca:
         estados.reverse()
         acoes.reverse()
         return estados, acoes
+
+    # ------------------- BUSCA CLÁSSICA -----------------------------------
 
     def busca_largura(self) -> ResultadoBusca:
         t_inicio = time.perf_counter()
@@ -240,15 +291,21 @@ class LabirintoBusca:
             celulas_livres=self.celulas_livres
         )
 
-    def busca_prioridade(self, nome: str, funcao_prioridade) -> ResultadoBusca:
+    def busca_prioridade(
+        self, nome: str, funcao_prioridade, 
+        origem: Optional[Estado] = None, destino: Optional[Estado] = None
+    ) -> ResultadoBusca:
         t_inicio = time.perf_counter()
         max_fronteira = 0
 
+        origem = origem or self.inicio
+        destino = destino or self.objetivo
+
         contador = itertools.count()
-        inicio = No(self.inicio, g=0.0)
+        inicio = No(origem, g=0.0)
         fronteira = []
         heapq.heappush(fronteira, (funcao_prioridade(inicio), next(contador), inicio))
-        melhor_g: Dict[Estado, float] = {self.inicio: 0.0}
+        melhor_g: Dict[Estado, float] = {origem: 0.0}
         fechados: Set[Estado] = set()
         ordem_explorados: List[Estado] = []
         nos_explorados = 0
@@ -265,7 +322,7 @@ class LabirintoBusca:
             nos_explorados += 1
             ordem_explorados.append(no.estado)
 
-            if no.estado == self.objetivo:
+            if no.estado == destino:
                 caminho, acoes = self.reconstruir(no)
                 return ResultadoBusca(
                     nome, True, caminho, acoes,
@@ -316,10 +373,14 @@ class LabirintoBusca:
             lambda no: no.g + peso * self.h(no.estado)
         )
 
-    def busca_astar(self) -> ResultadoBusca:
+    def busca_astar(self, origem: Optional[Estado] = None, destino: Optional[Estado] = None) -> ResultadoBusca:
+        origem = origem or self.inicio
+        destino = destino or self.objetivo
         return self.busca_prioridade(
             'A* (Clássico)',
-            lambda no: no.g + self.h(no.estado)
+            lambda no: no.g + self.h(no.estado, destino),
+            origem=origem,
+            destino=destino
         )
 
     def busca_idastar(self) -> ResultadoBusca:
@@ -394,7 +455,6 @@ class LabirintoBusca:
                 )
 
             limite = temp
-
 
     # ------------------- BUSCA LOCAL -----------------------------------
 
@@ -495,6 +555,9 @@ class LabirintoBusca:
 
             while True:
                 vizinhos = self._vizinhos_swap(atual)
+                if not vizinhos: 
+                    break
+                    
                 melhor_viz = min(vizinhos, key=lambda v: self._custo_solucao(v, dist))
                 custo_viz = self._custo_solucao(melhor_viz, dist)
                 total_iteracoes += 1
@@ -606,20 +669,151 @@ class LabirintoBusca:
             taxa_sucesso=taxa_sucesso
         )
 
+    # ------------------- BUSCA ONLINE -----------------------------------
+
+    def perceber_ambiente(self, estado_atual: Estado, mapa_interno: List[List[bool]]) -> int:
+        linha, coluna = estado_atual
+        celulas_reveladas_agora = 0
+        
+        direcoes = [(linha - 1, coluna), (linha + 1, coluna), (linha, coluna - 1), (linha, coluna + 1)]
+        
+        for l, c in direcoes:
+            if 0 <= l < self.altura and 0 <= c < self.largura:
+                if mapa_interno[l][c] is None:
+                    mapa_interno[l][c] = self.paredes[l][c]
+                    celulas_reveladas_agora += 1
+                    
+        return celulas_reveladas_agora
+
+    def vizinhos_interno(self, estado: Estado, mapa_interno: List[List[bool]]):
+        linha, coluna = estado
+        candidatos = [
+            ('up',    (linha - 1, coluna)),
+            ('down',  (linha + 1, coluna)),
+            ('left',  (linha, coluna - 1)),
+            ('right', (linha, coluna + 1)),
+        ]
+        
+        resultado = []
+        for acao, (l, c) in candidatos:
+            if 0 <= l < self.altura and 0 <= c < self.largura:
+                if mapa_interno[l][c] is not True:
+                    resultado.append((acao, (l, c), 1.0))
+                    
+        return resultado
+
+    def busca_astar_interno(self, origem: Estado, destino: Estado, mapa_interno: List[List[bool]]) -> ResultadoBusca:
+        contador = itertools.count()
+        inicio = No(origem, g=0.0)
+        fronteira = []
+        
+        f_inicial = inicio.g + self.h(inicio.estado, destino)
+        heapq.heappush(fronteira, (f_inicial, next(contador), inicio))
+        
+        melhor_g: Dict[Estado, float] = {origem: 0.0}
+        fechados: Set[Estado] = set()
+        
+        while fronteira:
+            _, _, no = heapq.heappop(fronteira)
+
+            if no.estado in fechados:
+                continue
+
+            if no.estado == destino:
+                caminho, acoes = self.reconstruir(no)
+                return ResultadoBusca('A* Interno', True, caminho, acoes, 0, 0, [])
+
+            fechados.add(no.estado)
+
+            for acao, estado, custo in self.vizinhos_interno(no.estado, mapa_interno):
+                novo_g = no.g + custo
+                
+                if estado in fechados:
+                    continue
+                    
+                if novo_g < melhor_g.get(estado, math.inf):
+                    filho = No(estado=estado, pai=no, acao=acao, g=novo_g)
+                    melhor_g[estado] = novo_g
+                    
+                    f_filho = novo_g + self.h(estado, destino)
+                    heapq.heappush(fronteira, (f_filho, next(contador), filho))
+
+        return ResultadoBusca('A* Interno', False, [], [], 0, 0, [])
+
+    def _gerar_resultado_online(self, sucesso, caminho, reveladas, revisitadas, replanejamentos):
+        custo_online = len(caminho) - 1 
+        
+        rota_perfeita = self.busca_astar(origem=self.inicio, destino=self.objetivo)
+        custo_offline = float(rota_perfeita.tamanho_caminho) if rota_perfeita.encontrado else 0.0
+        
+        razao = (custo_online / custo_offline) if custo_offline > 0 else 0.0
+
+        return ResultadoBuscaOnline(
+            sucesso=sucesso,
+            caminho_percorrido=caminho,
+            movimentos_totais=len(caminho),
+            custo_real=custo_online,
+            celulas_reveladas=reveladas,
+            celulas_revisitadas=revisitadas,
+            num_replanejamentos=replanejamentos,
+            custo_offline=custo_offline,
+            razao_online_offline=razao
+        )
+
+    def busca_online_replanning(self) -> ResultadoBuscaOnline:
+        mapa_interno = [[None for _ in range(self.largura)] for _ in range(self.altura)]
+        
+        mapa_interno[self.inicio[0]][self.inicio[1]] = False
+        mapa_interno[self.objetivo[0]][self.objetivo[1]] = False
+        
+        estado_atual = self.inicio
+        caminho_percorrido = [estado_atual]
+        visitados_historico = {estado_atual: 1} 
+        
+        celulas_reveladas = 0
+        celulas_revisitadas = 0
+        replanejamentos = 0
+        
+        while estado_atual != self.objetivo:
+            novas_revelacoes = self.perceber_ambiente(estado_atual, mapa_interno)
+            celulas_reveladas += novas_revelacoes
+            
+            rota_planejada = self.busca_astar_interno(origem=estado_atual, destino=self.objetivo, mapa_interno=mapa_interno)
+            
+            if not rota_planejada.encontrado:
+                return self._gerar_resultado_online(False, caminho_percorrido, celulas_reveladas, celulas_revisitadas, replanejamentos)
+                
+            replanejamentos += 1
+            
+            proximo_passo = rota_planejada.caminho[0] 
+            estado_atual = proximo_passo
+            caminho_percorrido.append(estado_atual)
+            
+            if estado_atual in visitados_historico:
+                celulas_revisitadas += 1
+                visitados_historico[estado_atual] += 1
+            else:
+                visitados_historico[estado_atual] = 1
+
+        return self._gerar_resultado_online(True, caminho_percorrido, celulas_reveladas, celulas_revisitadas, replanejamentos)
+
 
 def imprimir_labirinto(
     lab: LabirintoBusca,
-    resultado: Optional[ResultadoBusca] = None,
+    resultado = None,
     mostrar_explorados: bool = True,
     caminho_local: Optional[List[Estado]] = None
 ):
-
     if caminho_local is not None:
         caminho = set(caminho_local)
-    else:
-        caminho = set(resultado.caminho) if resultado and resultado.encontrado else set()
+        explorados = set()
+    elif hasattr(resultado, 'caminho_percorrido'): 
+        caminho = set(resultado.caminho_percorrido) if resultado and resultado.sucesso else set()
+        explorados = set() 
+    else: 
+        caminho = set(resultado.caminho) if getattr(resultado, 'encontrado', False) else set()
+        explorados = set(getattr(resultado, 'estados_explorados', [])) if mostrar_explorados else set()
 
-    explorados = set(resultado.estados_explorados) if resultado and mostrar_explorados else set()
     coletas = set(lab.coletas)
 
     print()
@@ -709,80 +903,127 @@ def imprimir_resultado_local(lab: LabirintoBusca, resultado: ResultadoBuscaLocal
     plotar_curva_convergencia(resultado.curva_convergencia, resultado.algoritmo)
 
 
+def imprimir_metricas_online(resultado: ResultadoBuscaOnline):
+    print(f'\n{"=" * 54}')
+    print(f'  Busca Online (Replanning com A*)')
+    print(f'{"=" * 54}')
+    print(f'  Sucesso              : {"sim" if resultado.sucesso else "não"}')
+    print(f'  Movimentos totais    : {resultado.movimentos_totais}')
+    print(f'  Custo real percorrido: {resultado.custo_real}')
+    print(f'  Células reveladas    : {resultado.celulas_reveladas}')
+    print(f'  Células revisitadas  : {resultado.celulas_revisitadas}')
+    print(f'  Replanejamentos      : {resultado.num_replanejamentos}')
+    print(f'  Custo Offline (ideal): {resultado.custo_offline}')
+    print(f'  Razão Online/Offline : {resultado.razao_online_offline:.3f}')
+
+
 def menu_principal():
-    lab = None
+    print("================================================================")
+    print("         Agente Inteligente em Labirinto        ")
+    print("================================================================")
+    print("Digite 1 caso queira colocar um caminho de labirinto via txt.")
+    print("Digite 2 caso queira fazer uma Busca Online com um labirinto desconhecido.")
+    
+    escolha_origem = input("\nEscolha sua opção [1 ou 2]: ").strip()
 
-    while lab is None:
-        caminho_arquivo = input('Cole aqui o caminho do seu labirinto (OBS Sem aspas):').strip()
+    if escolha_origem == '2':
+        print("\n[MÁQUINA] Construindo um labirinto aleatório e desconhecido para o agente...")
+        lab = LabirintoBusca.gerar_aleatorio(largura=31, altura=15)
+        
+        print("\n[MÁQUINA] Print do Labirinto que foi criado (Apenas nós vemos as paredes):")
+        imprimir_labirinto(lab, resultado=None, mostrar_explorados=False)
+        
+        print("\n[AGENTE] Iniciando exploração às cegas (Busca Online com Replanejamento)...")
+        resultado_online = lab.busca_online_replanning()
+        
+        print('\n[AGENTE] Trajeto final percorrido até o objetivo:')
+        imprimir_labirinto(lab, resultado=resultado_online, mostrar_explorados=False)
+        imprimir_metricas_online(resultado_online)
+        return  
 
-        try:
-            lab = LabirintoBusca(caminho_arquivo)
-            print('\n[Sucesso] Labirinto carregado!')
-        except FileNotFoundError:
-            print('\n[Erro] Arquivo não encontrado. Verifique o caminho e tente novamente.')
-        except ValueError as e:
-            print(f'\n[Erro de Validação do Mapa] {e}')
-        except Exception as e:
-            print(f'\n[Erro Inesperado] {e}')
+    elif escolha_origem == '1':
+        lab = None
+        while lab is None:
+            caminho_arquivo = input('\nCole aqui o caminho do seu labirinto (OBS Sem aspas): ').strip()
+            try:
+                lab = LabirintoBusca(filename=caminho_arquivo)
+                print('\n[Sucesso] Labirinto carregado!')
+            except FileNotFoundError:
+                print('\n[Erro] Arquivo não encontrado. Verifique o caminho e tente novamente.')
+            except ValueError as e:
+                print(f'\n[Erro de Validação do Mapa] {e}')
+            except Exception as e:
+                print(f'\n[Erro Inesperado] {e}')
 
-    imprimir_labirinto(lab, resultado=None, mostrar_explorados=False)
+        imprimir_labirinto(lab, resultado=None, mostrar_explorados=False)
 
-    print('─── Busca Clássica ───────────────────')
-    print('1 - Busca em Largura (BFS)')
-    print('2 - Busca em Profundidade (DFS)')
-    print('3 - Busca de Custo Uniforme (UCS)')
-    print('4 - Greedy Best-First Search')
-    print('5 - Weighted A*')
-    print('6 - IDA*')
-    print('7 - A* (Clássico)')
-    print('─── Busca Local ─────────────────────')
-    print('8 - Hill-Climbing (random-restart + sideways)')
-    print('9 - Simulated Annealing')
-    print('────────────────────────────────────────────────')
+        print('─── Busca Clássica ───────────────────')
+        print('1 - Busca em Largura (BFS)')
+        print('2 - Busca em Profundidade (DFS)')
+        print('3 - Busca de Custo Uniforme (UCS)')
+        print('4 - Greedy Best-First Search')
+        print('5 - Weighted A*')
+        print('6 - IDA*')
+        print('7 - A* (Clássico)')
+        print('─── Busca Local ─────────────────────')
+        print('8 - Hill-Climbing (random-restart + sideways)')
+        print('9 - Simulated Annealing')
+        print('─── Busca Online ────────────────────')
+        print('10 - Busca Online (Replanning com A*)')
+        print('─────────────────────────────────────')
 
-    opcao = input('Digite a opção desejada [1-9]: ').strip()
+        opcao = input('Digite a opção desejada [1-10]: ').strip()
 
-    if opcao in ('1', '2', '3', '4', '5', '6', '7'):
-        if opcao == '1':
-            resultado = lab.busca_largura()
-        elif opcao == '2':
-            resultado = lab.busca_profundidade()
-        elif opcao == '3':
-            resultado = lab.busca_custo_uniforme()
-        elif opcao == '4':
-            resultado = lab.busca_gulosa()
-        elif opcao == '5':
-            peso = float(input('Informe o peso w da Weighted A* (ex: 2.0): ').strip())
-            resultado = lab.busca_weighted_astar(peso=peso)
-        elif opcao == '6':
-            resultado = lab.busca_idastar()
-        elif opcao == '7':
-            resultado = lab.busca_astar()
+        if opcao in ('1', '2', '3', '4', '5', '6', '7'):
+            if opcao == '1':
+                resultado = lab.busca_largura()
+            elif opcao == '2':
+                resultado = lab.busca_profundidade()
+            elif opcao == '3':
+                resultado = lab.busca_custo_uniforme()
+            elif opcao == '4':
+                resultado = lab.busca_gulosa()
+            elif opcao == '5':
+                peso = float(input('Informe o peso w da Weighted A* (ex: 2.0): ').strip())
+                resultado = lab.busca_weighted_astar(peso=peso)
+            elif opcao == '6':
+                resultado = lab.busca_idastar()
+            elif opcao == '7':
+                resultado = lab.busca_astar()
 
-        print('\nSolução encontrada no labirinto:')
-        imprimir_labirinto(lab, resultado=resultado, mostrar_explorados=True)
-        imprimir_metricas(resultado)
+            print('\nSolução encontrada no labirinto:')
+            imprimir_labirinto(lab, resultado=resultado, mostrar_explorados=True)
+            imprimir_metricas(resultado)
 
-    elif opcao == '8':
-        if not lab.coletas:
-            print('\n[Aviso] O labirinto não tem pontos C. Carregue um mapa com pontos de coleta.')
-            return
-        n = int(input('Número de reinícios (padrão 20): ').strip() or '20')
-        s = int(input('Máximo de sideways consecutivos (padrão 10): ').strip() or '10')
-        resultado_local = lab.hill_climbing(num_reinicializacoes=n, max_sideways=s)
-        imprimir_resultado_local(lab, resultado_local)
+        elif opcao == '8':
+            if not lab.coletas:
+                print('\n[Aviso] O labirinto não tem pontos C. Carregue um mapa com pontos de coleta.')
+                return
+            n = int(input('Número de reinícios (padrão 20): ').strip() or '20')
+            s = int(input('Máximo de sideways consecutivos (padrão 10): ').strip() or '10')
+            resultado_local = lab.hill_climbing(num_reinicializacoes=n, max_sideways=s)
+            imprimir_resultado_local(lab, resultado_local)
 
-    elif opcao == '9':
-        if not lab.coletas:
-            print('\n[Aviso] O labirinto não tem pontos C. Carregue um mapa com pontos de coleta.')
-            return
-        e = int(input('Número de execuções independentes (padrão 5): ').strip() or '5')
-        a = float(input('Taxa de resfriamento alpha (padrão 0.995): ').strip() or '0.995')
-        resultado_local = lab.simulated_annealing(num_execucoes=e, alpha=a)
-        imprimir_resultado_local(lab, resultado_local)
+        elif opcao == '9':
+            if not lab.coletas:
+                print('\n[Aviso] O labirinto não tem pontos C. Carregue um mapa com pontos de coleta.')
+                return
+            e = int(input('Número de execuções independentes (padrão 5): ').strip() or '5')
+            a = float(input('Taxa de resfriamento alpha (padrão 0.995): ').strip() or '0.995')
+            resultado_local = lab.simulated_annealing(num_execucoes=e, alpha=a)
+            imprimir_resultado_local(lab, resultado_local)
+
+        elif opcao == '10':
+            resultado_online = lab.busca_online_replanning()
+            print('\nTrajeto percorrido pelo agente:')
+            imprimir_labirinto(lab, resultado=resultado_online, mostrar_explorados=False)
+            imprimir_metricas_online(resultado_online)
+
+        else:
+            print('\n[Erro] Opção inválida. Reinicie o programa.')
 
     else:
-        print('\n[Erro] Opção inválida. Reinicie o programa.')
+        print("\n[Erro] Opção de origem inválida. Encerrando.")
 
 
 if __name__ == '__main__':
