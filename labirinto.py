@@ -6,7 +6,8 @@ import itertools
 import math
 import time
 import random
-import pandas as pd
+import csv
+import os
 
 Estado = Tuple[int, int]
 
@@ -69,6 +70,27 @@ class ResultadoBuscaLocal:
     num_execucoes: int
     curva_convergencia: List[float]
     taxa_sucesso: float = 0.0
+
+
+@dataclass
+class ResultadoBuscaOnline:
+    algoritmo: str
+    encontrado: bool
+    trajetoria: List[Estado]
+    custo_real: float
+    total_movimentos: int
+    celulas_reveladas: int
+    celulas_revisitadas: int
+    num_replanejamentos: int
+    tempo_execucao: float
+    custo_otimo_offline: float
+    mapa_final_interno: list  # List[List[Optional[bool]]]
+
+    @property
+    def razao_online_offline(self) -> float:
+        if math.isinf(self.custo_otimo_offline) or self.custo_otimo_offline == 0:
+            return math.inf
+        return self.custo_real / self.custo_otimo_offline
 
 
 class LabirintoBusca:
@@ -606,6 +628,120 @@ class LabirintoBusca:
             taxa_sucesso=taxa_sucesso
         )
 
+    # ------------------- BUSCA ONLINE ----------------------------------
+
+    def busca_online(
+        self,
+        raio_percepcao: int = 1,
+        max_passos: int = 10000
+    ) -> ResultadoBuscaOnline:
+        t_inicio = time.perf_counter()
+
+        # None = desconhecida, True = parede, False = livre
+        mapa_interno: List[List] = [[None] * self.largura for _ in range(self.altura)]
+
+        posicao = self.inicio
+        mapa_interno[posicao[0]][posicao[1]] = False
+
+        trajetoria: List[Estado] = [posicao]
+        visitas: Dict[Estado, int] = {posicao: 1}
+        celulas_reveladas: Set[Estado] = set()
+        custo_real = 0.0
+        num_replanejamentos = 0
+        plano: List[Estado] = []
+
+        def perceber(pos: Estado) -> bool:
+            """Revela a célula atual e as vizinhas ortogonais dentro do raio de percepção."""
+            l, c = pos
+            novidade = False
+            # vizinhança Manhattan: só direções ortogonais (sem diagonal)
+            candidatos = [(l, c)]
+            for dist in range(1, raio_percepcao + 1):
+                candidatos += [(l - dist, c), (l + dist, c), (l, c - dist), (l, c + dist)]
+            for nl, nc in candidatos:
+                if 0 <= nl < self.altura and 0 <= nc < self.largura:
+                    if mapa_interno[nl][nc] is None:
+                        mapa_interno[nl][nc] = self.paredes[nl][nc]
+                        celulas_reveladas.add((nl, nc))
+                        novidade = True
+            return novidade
+
+        def astar_interno(origem: Estado, destino: Estado) -> List[Estado]:
+            """A* no mapa interno — células desconhecidas são tratadas como livres (otimista)."""
+            h = lambda e: abs(e[0] - destino[0]) + abs(e[1] - destino[1])
+            cnt = itertools.count()
+            heap = [(h(origem), next(cnt), origem, 0.0)]
+            melhor_g: Dict[Estado, float] = {origem: 0.0}
+            pais: Dict[Estado, Optional[Estado]] = {origem: None}
+            fechados: Set[Estado] = set()
+            while heap:
+                _, _, estado, g = heapq.heappop(heap)
+                if estado in fechados:
+                    continue
+                if estado == destino:
+                    path, cur = [], destino
+                    while cur is not None:
+                        path.append(cur)
+                        cur = pais[cur]
+                    path.reverse()
+                    return path
+                fechados.add(estado)
+                for dl, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    nl, nc = estado[0] + dl, estado[1] + dc
+                    viz = (nl, nc)
+                    if not (0 <= nl < self.altura and 0 <= nc < self.largura):
+                        continue
+                    if mapa_interno[nl][nc] is True:  # parede confirmada
+                        continue
+                    ng = g + 1.0
+                    if viz not in fechados and ng < melhor_g.get(viz, math.inf):
+                        melhor_g[viz] = ng
+                        pais[viz] = estado
+                        heapq.heappush(heap, (ng + h(viz), next(cnt), viz, ng))
+            return []
+
+        # Custo ótimo offline para calcular a razão online/offline
+        res_offline = self.busca_astar()
+        custo_otimo = res_offline.custo_caminho if res_offline.encontrado else math.inf
+
+        for _ in range(max_passos):
+            nova_info = perceber(posicao)
+
+            if posicao == self.objetivo:
+                break
+
+            # Replanejar se: novo info, plano vazio ou próximo passo é parede confirmada
+            prox_invalido = bool(plano) and mapa_interno[plano[0][0]][plano[0][1]] is True
+            if nova_info or not plano or prox_invalido:
+                novo_plano = astar_interno(posicao, self.objetivo)
+                num_replanejamentos += 1
+                plano = novo_plano[1:]  # exclui posição atual
+                if not plano:
+                    break  # sem caminho possível
+
+            proximo = plano.pop(0)
+            posicao = proximo
+            custo_real += 1.0
+            trajetoria.append(posicao)
+            visitas[posicao] = visitas.get(posicao, 0) + 1
+
+        encontrado = posicao == self.objetivo
+        revisitadas = sum(1 for v in visitas.values() if v > 1)
+
+        return ResultadoBuscaOnline(
+            algoritmo=f'Busca Online — Replanning A* (r={raio_percepcao})',
+            encontrado=encontrado,
+            trajetoria=trajetoria,
+            custo_real=custo_real,
+            total_movimentos=len(trajetoria) - 1,
+            celulas_reveladas=len(celulas_reveladas),
+            celulas_revisitadas=revisitadas,
+            num_replanejamentos=num_replanejamentos,
+            tempo_execucao=time.perf_counter() - t_inicio,
+            custo_otimo_offline=custo_otimo,
+            mapa_final_interno=mapa_interno
+        )
+
 
 def imprimir_labirinto(
     lab: LabirintoBusca,
@@ -709,6 +845,117 @@ def imprimir_resultado_local(lab: LabirintoBusca, resultado: ResultadoBuscaLocal
     plotar_curva_convergencia(resultado.curva_convergencia, resultado.algoritmo)
 
 
+def imprimir_labirinto_online(
+    lab: LabirintoBusca,
+    resultado: ResultadoBuscaOnline,
+    mostrar_mapa_interno: bool = False
+):
+    traj_set = set(resultado.trajetoria)
+    posicao_final = resultado.trajetoria[-1] if resultado.trajetoria else lab.inicio
+    mapa = resultado.mapa_final_interno
+
+    print()
+    for i in range(lab.altura):
+        for j in range(lab.largura):
+            estado = (i, j)
+            if mostrar_mapa_interno:
+                celula = mapa[i][j]
+                if celula is None:
+                    print('?', end='')
+                    continue
+                if celula is True:
+                    print('#', end='')
+                    continue
+                # célula livre conhecida — cai no bloco abaixo
+            elif lab.paredes[i][j]:
+                print('#', end='')
+                continue
+
+            if estado == lab.inicio:
+                print('A', end='')
+            elif estado == lab.objetivo:
+                print('B', end='')
+            elif estado in set(lab.coletas):
+                print('C', end='')
+            elif estado == posicao_final and not resultado.encontrado:
+                print('@', end='')
+            elif estado in traj_set:
+                print('*', end='')
+            else:
+                print(' ', end='')
+        print()
+    print()
+
+
+def imprimir_metricas_online(resultado: ResultadoBuscaOnline):
+    razao = resultado.razao_online_offline
+    razao_str = f'{razao:.3f}' if not math.isinf(razao) else 'inf'
+
+    print(f'\nAlgoritmo            : {resultado.algoritmo}')
+    print(f'Solução encontrada   : {"sim" if resultado.encontrado else "não"}')
+    print(f'Total de movimentos  : {resultado.total_movimentos}')
+    print(f'Custo real percorrido: {resultado.custo_real:.1f}')
+    print(f'Custo ótimo offline  : {resultado.custo_otimo_offline:.1f}')
+    print(f'Razão online/offline : {razao_str}')
+    print(f'Células reveladas    : {resultado.celulas_reveladas}')
+    print(f'Células revisitadas  : {resultado.celulas_revisitadas}')
+    print(f'Replanejamentos      : {resultado.num_replanejamentos}')
+    print(f'Tempo de execução    : {resultado.tempo_execucao * 1000:.3f} ms')
+
+
+def bateria_online_csv(
+    lab: LabirintoBusca,
+    caminho_mapa: str,
+    raios: Optional[List[int]] = None
+) -> Dict[int, ResultadoBuscaOnline]:
+    """
+    Roda busca_online com múltiplos raios e salva métricas em CSV.
+    Retorna um dicionário {raio: ResultadoBuscaOnline} para reuso.
+    """
+    if raios is None:
+        raios = [1, 2, 3, 5]
+
+    os.makedirs('resultados', exist_ok=True)
+    nome_curto = os.path.splitext(os.path.basename(caminho_mapa))[0]
+    caminho_csv = f'resultados/busca_online_{nome_curto}.csv'
+
+    campos = [
+        'mapa', 'raio', 'encontrado',
+        'total_movimentos', 'custo_real', 'custo_otimo_offline',
+        'razao_online_offline', 'celulas_reveladas', 'celulas_revisitadas',
+        'num_replanejamentos', 'tempo_ms'
+    ]
+
+    resultados_por_raio: Dict[int, ResultadoBuscaOnline] = {}
+
+    with open(caminho_csv, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=campos)
+        writer.writeheader()
+
+        for r in raios:
+            print(f"\n--- Raio de percepção: {r} ---")
+            resultado = lab.busca_online(raio_percepcao=r)
+            imprimir_metricas_online(resultado)
+            resultados_por_raio[r] = resultado
+
+            writer.writerow({
+                'mapa': nome_curto,
+                'raio': r,
+                'encontrado': resultado.encontrado,
+                'total_movimentos': resultado.total_movimentos,
+                'custo_real': resultado.custo_real,
+                'custo_otimo_offline': resultado.custo_otimo_offline,
+                'razao_online_offline': round(resultado.razao_online_offline, 4),
+                'celulas_reveladas': resultado.celulas_reveladas,
+                'celulas_revisitadas': resultado.celulas_revisitadas,
+                'num_replanejamentos': resultado.num_replanejamentos,
+                'tempo_ms': round(resultado.tempo_execucao * 1000, 3),
+            })
+
+    print(f"\n[OK] Resultados salvos em: {caminho_csv}")
+    return resultados_por_raio
+
+
 def menu_principal():
     lab = None
 
@@ -738,9 +985,11 @@ def menu_principal():
     print('─── Busca Local ─────────────────────')
     print('8 - Hill-Climbing (random-restart + sideways)')
     print('9 - Simulated Annealing')
+    print('─── Busca Online ────────────────────')
+    print('10 - Busca Online (Replanning A*)')
     print('────────────────────────────────────────────────')
 
-    opcao = input('Digite a opção desejada [1-9]: ').strip()
+    opcao = input('Digite a opção desejada [1-10]: ').strip()
 
     if opcao in ('1', '2', '3', '4', '5', '6', '7'):
         if opcao == '1':
@@ -780,6 +1029,15 @@ def menu_principal():
         a = float(input('Taxa de resfriamento alpha (padrão 0.995): ').strip() or '0.995')
         resultado_local = lab.simulated_annealing(num_execucoes=e, alpha=a)
         imprimir_resultado_local(lab, resultado_local)
+
+    elif opcao == '10':
+        r = int(input('Raio de percepção (padrão 1): ').strip() or '1')
+        resultado_online = lab.busca_online(raio_percepcao=r)
+        print('\nTrajetória percorrida (mapa real):')
+        imprimir_labirinto_online(lab, resultado_online, mostrar_mapa_interno=False)
+        print('Mapa interno final do agente:')
+        imprimir_labirinto_online(lab, resultado_online, mostrar_mapa_interno=True)
+        imprimir_metricas_online(resultado_online)
 
     else:
         print('\n[Erro] Opção inválida. Reinicie o programa.')
