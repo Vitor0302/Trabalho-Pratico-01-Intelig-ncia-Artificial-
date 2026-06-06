@@ -6,8 +6,6 @@ import itertools
 import math
 import time
 import random
-import os
-
 Estado = Tuple[int, int]
 
 
@@ -38,15 +36,14 @@ class ResultadoBusca:
 
     def calcular_j(
         self,
-        omega: float = 100.0,  # peso do bônus por encontrar a solução (completude)
-        alpha: float = 1.0,    # peso do custo do caminho percorrido (qualidade da rota)
-        beta:  float = 0.05,   # peso do número de nós expandidos (esforço computacional)
-        gamma: float = 1000.0, # peso do tempo de execução em segundos (velocidade)
-        theta: float = 0.1,    # peso do pico da fronteira (uso de memória)
-        eta:   float = 20.0    # peso da taxa de cobertura (eficiência de exploração do mapa)
+        omega: float = 100.0,  # peso do bônus por encontrar a solução
+        alpha: float = 1.0,    # peso do custo do caminho percorrido
+        beta:  float = 0.05,   # peso do número de nós expandidos
+        gamma: float = 1000.0, # peso do tempo de execução em segundos
+        theta: float = 0.1,    # peso do pico da fronteira
+        eta:   float = 20.0    # peso da taxa de cobertura
     ) -> float:
         sucesso = 1.0 if self.encontrado else 0.0
-        # taxa_cobertura: fração do mapa que o agente precisou explorar (0 = nada, 1 = tudo)
         taxa_cobertura = self.nos_explorados / max(self.celulas_livres, 1)
         return (
             + omega * sucesso
@@ -70,7 +67,6 @@ class ResultadoBuscaLocal:
     curva_convergencia: List[float]
     taxa_sucesso: float = 0.0
 
-
 @dataclass
 class ResultadoBuscaOnline:
     algoritmo: str
@@ -93,16 +89,19 @@ class ResultadoBuscaOnline:
 
 
 class LabirintoBusca:
-    def __init__(self, filename: str):
-        with open(filename, encoding='utf-8') as f:
-            contents = f.read()
+    def __init__(self, filename: Optional[str] = None, mapa_str: Optional[str] = None):
+        if filename:
+            with open(filename, encoding='utf-8') as f:
+                contents = f.read()
+        elif mapa_str:
+            contents = mapa_str
+        else:
+            raise ValueError('Forneça um caminho de arquivo ou uma string de mapa.')
 
         if contents.count('A') != 1:
             raise ValueError('O labirinto deve ter exatamente um ponto inicial A.')
         if contents.count('B') != 1:
             raise ValueError('O labirinto deve ter exatamente um objetivo B.')
-        if contents.count('C') == 1:
-            raise ValueError("O labirinto deve conter pelo menos 1 ponto de coleta C.")
 
         linhas = contents.splitlines()
         self.altura = len(linhas)
@@ -136,38 +135,37 @@ class LabirintoBusca:
 
     @classmethod
     def gerar_aleatorio(cls, largura: int = 31, altura: int = 15) -> 'LabirintoBusca':
-        if largura % 2 == 0:
-            largura += 1
-        if altura % 2 == 0:
-            altura += 1
+        """Gera um labirinto aleatório via backtracking recursivo."""
+        if largura % 2 == 0: largura += 1
+        if altura % 2 == 0: altura += 1
 
-        grid = [['#'] * largura for _ in range(altura)]
+        grade = [['#' for _ in range(largura)] for _ in range(altura)]
 
         def carve(r: int, c: int):
-            dirs = [(0, 2), (0, -2), (2, 0), (-2, 0)]
-            random.shuffle(dirs)
-            for dr, dc in dirs:
+            grade[r][c] = ' '
+            direcoes = [(0, 2), (0, -2), (2, 0), (-2, 0)]
+            random.shuffle(direcoes)
+            for dr, dc in direcoes:
                 nr, nc = r + dr, c + dc
-                if 0 < nr < altura - 1 and 0 < nc < largura - 1 and grid[nr][nc] == '#':
-                    grid[r + dr // 2][c + dc // 2] = ' '
-                    grid[nr][nc] = ' '
+                if 1 <= nr < altura - 1 and 1 <= nc < largura - 1 and grade[nr][nc] == '#':
+                    grade[r + dr // 2][c + dc // 2] = ' '
                     carve(nr, nc)
 
-        grid[1][1] = ' '
         carve(1, 1)
-        grid[1][1] = 'A'
-        grid[altura - 2][largura - 2] = 'B'
+        grade[1][1] = 'A'
+        grade[altura - 2][largura - 2] = 'B'
 
-        import tempfile
-        conteudo = '\n'.join(''.join(row) for row in grid)
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
-            f.write(conteudo)
-            tmp = f.name
-        try:
-            lab = cls(tmp)
-        finally:
-            os.unlink(tmp)
-        return lab
+        espacos_vazios = [
+            (r, c) for r in range(1, altura - 1) for c in range(1, largura - 1)
+            if grade[r][c] == ' ' and (r, c) not in [(1, 1), (altura - 2, largura - 2)]
+        ]
+        for _ in range(random.randint(1, 4)):
+            if espacos_vazios:
+                r, c = random.choice(espacos_vazios)
+                grade[r][c] = 'C'
+                espacos_vazios.remove((r, c))
+
+        return cls(mapa_str='\n'.join(''.join(linha) for linha in grade))
 
     def vizinhos(self, estado: Estado):
         linha, coluna = estado
@@ -183,9 +181,9 @@ class LabirintoBusca:
                 resultado.append((acao, (l, c), 1.0))
         return resultado
 
-    def h(self, estado: Estado) -> float:
-        """Heurística de Manhattan para movimentos ortogonais com custo unitário."""
-        return abs(estado[0] - self.objetivo[0]) + abs(estado[1] - self.objetivo[1])
+    def h(self, estado: Estado, destino: Optional[Estado] = None) -> float:
+        destino = destino or self.objetivo
+        return abs(estado[0] - destino[0]) + abs(estado[1] - destino[1])
 
     @staticmethod
     def reconstruir(no: No):
@@ -199,6 +197,8 @@ class LabirintoBusca:
         estados.reverse()
         acoes.reverse()
         return estados, acoes
+
+    # ------------------- BUSCA CLÁSSICA -----------------------------------
 
     def busca_largura(self) -> ResultadoBusca:
         t_inicio = time.perf_counter()
@@ -296,15 +296,21 @@ class LabirintoBusca:
             celulas_livres=self.celulas_livres
         )
 
-    def busca_prioridade(self, nome: str, funcao_prioridade) -> ResultadoBusca:
+    def busca_prioridade(
+        self, nome: str, funcao_prioridade, 
+        origem: Optional[Estado] = None, destino: Optional[Estado] = None
+    ) -> ResultadoBusca:
         t_inicio = time.perf_counter()
         max_fronteira = 0
 
+        origem = origem or self.inicio
+        destino = destino or self.objetivo
+
         contador = itertools.count()
-        inicio = No(self.inicio, g=0.0)
+        inicio = No(origem, g=0.0)
         fronteira = []
         heapq.heappush(fronteira, (funcao_prioridade(inicio), next(contador), inicio))
-        melhor_g: Dict[Estado, float] = {self.inicio: 0.0}
+        melhor_g: Dict[Estado, float] = {origem: 0.0}
         fechados: Set[Estado] = set()
         ordem_explorados: List[Estado] = []
         nos_explorados = 0
@@ -321,7 +327,7 @@ class LabirintoBusca:
             nos_explorados += 1
             ordem_explorados.append(no.estado)
 
-            if no.estado == self.objetivo:
+            if no.estado == destino:
                 caminho, acoes = self.reconstruir(no)
                 return ResultadoBusca(
                     nome, True, caminho, acoes,
@@ -372,10 +378,14 @@ class LabirintoBusca:
             lambda no: no.g + peso * self.h(no.estado)
         )
 
-    def busca_astar(self) -> ResultadoBusca:
+    def busca_astar(self, origem: Optional[Estado] = None, destino: Optional[Estado] = None) -> ResultadoBusca:
+        origem = origem or self.inicio
+        destino = destino or self.objetivo
         return self.busca_prioridade(
             'A* (Clássico)',
-            lambda no: no.g + self.h(no.estado)
+            lambda no: no.g + self.h(no.estado, destino),
+            origem=origem,
+            destino=destino
         )
 
     def busca_idastar(self) -> ResultadoBusca:
@@ -450,7 +460,6 @@ class LabirintoBusca:
                 )
 
             limite = temp
-
 
     # ------------------- BUSCA LOCAL -----------------------------------
 
@@ -551,6 +560,9 @@ class LabirintoBusca:
 
             while True:
                 vizinhos = self._vizinhos_swap(atual)
+                if not vizinhos: 
+                    break
+                    
                 melhor_viz = min(vizinhos, key=lambda v: self._custo_solucao(v, dist))
                 custo_viz = self._custo_solucao(melhor_viz, dist)
                 total_iteracoes += 1
@@ -685,10 +697,9 @@ class LabirintoBusca:
         plano: List[Estado] = []
 
         def perceber(pos: Estado) -> bool:
-            """Revela a célula atual e as vizinhas ortogonais dentro do raio de percepção."""
+            """Revela células dentro do raio de percepção (vizinhança Manhattan)."""
             l, c = pos
             novidade = False
-            # vizinhança Manhattan: só direções ortogonais (sem diagonal)
             candidatos = [(l, c)]
             for dist in range(1, raio_percepcao + 1):
                 candidatos += [(l - dist, c), (l + dist, c), (l, c - dist), (l, c + dist)]
@@ -701,7 +712,7 @@ class LabirintoBusca:
             return novidade
 
         def astar_interno(origem: Estado, destino: Estado) -> List[Estado]:
-            """A* no mapa interno — células desconhecidas são tratadas como livres (otimista)."""
+            """A* no mapa interno — células desconhecidas são tratadas como livres."""
             h = lambda e: abs(e[0] - destino[0]) + abs(e[1] - destino[1])
             cnt = itertools.count()
             heap = [(h(origem), next(cnt), origem, 0.0)]
@@ -725,7 +736,7 @@ class LabirintoBusca:
                     viz = (nl, nc)
                     if not (0 <= nl < self.altura and 0 <= nc < self.largura):
                         continue
-                    if mapa_interno[nl][nc] is True:  # parede confirmada
+                    if mapa_interno[nl][nc] is True:
                         continue
                     ng = g + 1.0
                     if viz not in fechados and ng < melhor_g.get(viz, math.inf):
@@ -734,7 +745,6 @@ class LabirintoBusca:
                         heapq.heappush(heap, (ng + h(viz), next(cnt), viz, ng))
             return []
 
-        # Custo ótimo offline para calcular a razão online/offline
         res_offline = self.busca_astar()
         custo_otimo = res_offline.custo_caminho if res_offline.encontrado else math.inf
 
@@ -744,14 +754,13 @@ class LabirintoBusca:
             if posicao == self.objetivo:
                 break
 
-            # Replanejar se: novo info, plano vazio ou próximo passo é parede confirmada
             prox_invalido = bool(plano) and mapa_interno[plano[0][0]][plano[0][1]] is True
             if nova_info or not plano or prox_invalido:
                 novo_plano = astar_interno(posicao, self.objetivo)
                 num_replanejamentos += 1
-                plano = novo_plano[1:]  # exclui posição atual
+                plano = novo_plano[1:]
                 if not plano:
-                    break  # sem caminho possível
+                    break
 
             proximo = plano.pop(0)
             posicao = proximo
