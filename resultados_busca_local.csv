@@ -1,0 +1,9 @@
+Metodo,Labirinto,Pontos_Coleta,Parametro,Melhor_Custo,Pior_Custo,Custo_Medio,Tempo_ms,Iteracoes,Taxa_Sucesso_pct
+Hill-Climbing,BL lab1,3,rest=20 sw=10,118,118,118.00,0.122,2.3,100.0
+Hill-Climbing,BL lab2,5,rest=40 sw=15,268,268,268.00,0.321,3.4,100.0
+Hill-Climbing,BL lab3,7,rest=60 sw=20,676,1198,783.83,1.535,24.4,68.3
+Hill-Climbing,BL lab4,8,rest=80 sw=25,1272,2088,1407.47,2.630,30.3,81.2
+Simulated Annealing,BL lab1,3,alpha=0.995,118,118,118.00,0.753,250,100.0
+Simulated Annealing,BL lab2,5,alpha=0.985,268,268,268.00,1.952,300,100.0
+Simulated Annealing,BL lab3,7,alpha=0.990,676,676,676.00,6.553,600,100.0
+Simulated Annealing,BL lab4,8,alpha=0.990,1272,1272,1272.00,13.613,1000,100.0

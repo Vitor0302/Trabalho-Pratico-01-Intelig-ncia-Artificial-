@@ -1209,6 +1209,60 @@ def exportar_csv_busca_online(
     print(f'  [OK] Métricas da busca online salvas em: {filename}')
 
 
+def _menu_exportar_csv(lab: LabirintoBusca):
+    """Submenu da opção 11: deixa o usuário escolher para qual tipo de busca
+    gerar o arquivo .csv de métricas."""
+    print('\n─── Exportar métricas para CSV ───────')
+    print('1 - Busca Clássica')
+    print('2 - Busca Local')
+    print('3 - Busca Online')
+    print('4 - Todas')
+    print('Enter - Cancelar')
+    escolha = input('Escolha [1/2/3/4 ou Enter]: ').strip()
+
+    if not escolha:
+        print('  Exportação cancelada.')
+        return
+
+    if escolha not in ('1', '2', '3', '4'):
+        print('  [Erro] Opção inválida.')
+        return
+
+    # Pergunta o raio de percepção apenas se a busca online for gerada.
+    raio = 1
+    if escolha in ('3', '4'):
+        entrada = input('Raio de percepção da busca online (padrão 1): ').strip()
+        try:
+            raio = int(entrada) if entrada else 1
+            if raio < 1:
+                raise ValueError
+        except ValueError:
+            print('  [Aviso] Valor inválido — usando raio 1.')
+            raio = 1
+
+    print('\n[Experimentos] Rodando algoritmos e gerando arquivo(s) .csv...')
+
+    if escolha in ('1', '4'):
+        exportar_csv_busca_classica(lab)
+
+    if escolha in ('2', '4'):
+        if lab.coletas:
+            exportar_csv_busca_local(lab)
+        else:
+            print('  [Info] Sem pontos de coleta C — CSV de busca local não gerado.')
+
+    if escolha in ('3', '4'):
+        # Inclui o raio no nome só quando > 1, pra não sobrescrever execuções
+        # com raios diferentes e manter o nome padrão para o raio 1.
+        nome_online = (
+            'resultados_busca_online.csv' if raio == 1
+            else f'resultados_busca_online_r{raio}.csv'
+        )
+        exportar_csv_busca_online(lab, filename=nome_online, raio_percepcao=raio)
+
+    print('\n[OK] Arquivo(s) .csv gerado(s) na pasta atual.')
+
+
 def _menu_visualizacao_online(lab: LabirintoBusca, resultado: ResultadoBuscaOnline):
     """Oferece a visualização da trajetória online passo a passo:
     animação ao vivo no terminal e/ou exportação de GIF para o relatório."""
@@ -1351,14 +1405,7 @@ def menu_principal():
             imprimir_metricas_online(resultado_online)
 
         elif opcao == '11':
-            print('\n[Experimentos] Rodando algoritmos e gerando arquivos .csv...')
-            exportar_csv_busca_classica(lab)
-            if lab.coletas:
-                exportar_csv_busca_local(lab)
-            else:
-                print('  [Info] Sem pontos de coleta C — CSV de busca local não gerado.')
-            exportar_csv_busca_online(lab)
-            print('\n[OK] Arquivos .csv gerados na pasta atual.')
+            _menu_exportar_csv(lab)
 
         else:
             print('\n[Erro] Opção inválida. Reinicie o programa.')

@@ -1,0 +1,11 @@
+Labirinto,Algoritmo,Sucesso,Custo,Passos,Explorados,Expandidos,Fronteira,Tempo_ms
+BC lab1 (21x11),BFS,sim,30,30,107,106,6,0.249
+BC lab1 (21x11),DFS,sim,44,44,45,44,8,0.099
+BC lab1 (21x11),UCS,sim,30,30,107,106,6,0.341
+BC lab1 (21x11),Gulosa,sim,32,32,33,32,7,0.095
+BC lab1 (21x11),A*,sim,30,30,89,88,7,0.209
+BC lab2 (33x17),BFS,sim,50,50,223,222,11,0.418
+BC lab2 (33x17),DFS,sim,82,82,206,205,21,0.366
+BC lab2 (33x17),UCS,sim,50,50,223,222,11,0.455
+BC lab2 (33x17),Gulosa,sim,50,50,51,50,10,0.177
+BC lab2 (33x17),A*,sim,50,50,138,137,14,0.368
