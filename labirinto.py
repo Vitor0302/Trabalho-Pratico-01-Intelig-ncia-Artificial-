@@ -80,9 +80,8 @@ class ResultadoBuscaOnline:
     num_replanejamentos: int
     tempo_execucao: float
     custo_otimo_offline: float
-    mapa_final_interno: list  # List[List[Optional[bool]]]
-    # Snapshots passo a passo: cada item é (posicao_do_agente, copia_do_mapa_interno).
-    # A trajetória até o passo k é simplesmente trajetoria[:k+1].
+    mapa_final_interno: list 
+    
     frames: List[Tuple[Estado, list]] = field(default_factory=list)
 
     @property
@@ -1021,7 +1020,6 @@ def exportar_animacao_online(
         print('  [Aviso] matplotlib não instalado. Execute: pip install matplotlib pillow')
         return
 
-    # Códigos de categoria usados na grade numérica de cada frame.
     DESCONHECIDO, PAREDE, LIVRE, TRAJETO, COLETA, INICIO, OBJETIVO, AGENTE = range(8)
     cores = ['#1a1a1a', '#777777', '#ffffff', '#7fb3ff',
              '#ff9f1c', '#2ec27e', '#ffd60a', '#e63946']
@@ -1252,8 +1250,7 @@ def _menu_exportar_csv(lab: LabirintoBusca):
             print('  [Info] Sem pontos de coleta C — CSV de busca local não gerado.')
 
     if escolha in ('3', '4'):
-        # Inclui o raio no nome só quando > 1, pra não sobrescrever execuções
-        # com raios diferentes e manter o nome padrão para o raio 1.
+        # Inclui o raio no nome só quando > 1, pra não sobrescrever execuções com raios diferentes e manter o nome padrão para o raio 1.
         nome_online = (
             'resultados_busca_online.csv' if raio == 1
             else f'resultados_busca_online_r{raio}.csv'
@@ -1400,7 +1397,6 @@ def menu_principal():
             imprimir_labirinto(lab, resultado=resultado_online, mostrar_explorados=False)
             print('Mapa interno final do agente (? = nunca visto):')
             imprimir_mapa_interno(lab, resultado_online)
-            # A animação no terminal limpa a tela, então mostramos as métricas por último.
             _menu_visualizacao_online(lab, resultado_online)
             imprimir_metricas_online(resultado_online)
 
