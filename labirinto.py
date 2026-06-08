@@ -648,7 +648,7 @@ class LabirintoBusca:
                     custo_melhor_exec = custo_atual
                     melhor_exec = atual[:]
 
-                curva_exec.append(custo_melhor_exec)
+                curva_exec.append(custo_atual)
 
                 T *= alpha
                 t += 1
