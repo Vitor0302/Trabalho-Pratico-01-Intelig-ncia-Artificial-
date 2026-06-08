@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Tuple, List, Dict, Set
 from collections import deque
 import heapq
@@ -6,6 +6,7 @@ import itertools
 import math
 import time
 import random
+import csv
 Estado = Tuple[int, int]
 
 
@@ -80,6 +81,9 @@ class ResultadoBuscaOnline:
     tempo_execucao: float
     custo_otimo_offline: float
     mapa_final_interno: list  # List[List[Optional[bool]]]
+    # Snapshots passo a passo: cada item é (posicao_do_agente, copia_do_mapa_interno).
+    # A trajetória até o passo k é simplesmente trajetoria[:k+1].
+    frames: List[Tuple[Estado, list]] = field(default_factory=list)
 
     @property
     def razao_online_offline(self) -> float:
@@ -134,8 +138,12 @@ class LabirintoBusca:
             self.paredes.append(row)
 
     @classmethod
-    def gerar_aleatorio(cls, largura: int = 31, altura: int = 15) -> 'LabirintoBusca':
-        """Gera um labirinto aleatório via backtracking recursivo."""
+    def gerar_aleatorio(cls, largura: int = 31, altura: int = 15, num_coletas: int = 0) -> 'LabirintoBusca':
+        """Gera um labirinto aleatório via backtracking recursivo.
+
+        num_coletas: quantidade de pontos de coleta C a inserir. O padrão é 0,
+        pois o único uso atual é a busca online (opção 2), que vai apenas de A
+        até B e não coleta os C. Use > 0 para gerar mapas com coletas."""
         if largura % 2 == 0: largura += 1
         if altura % 2 == 0: altura += 1
 
@@ -159,7 +167,7 @@ class LabirintoBusca:
             (r, c) for r in range(1, altura - 1) for c in range(1, largura - 1)
             if grade[r][c] == ' ' and (r, c) not in [(1, 1), (altura - 2, largura - 2)]
         ]
-        for _ in range(random.randint(1, 4)):
+        for _ in range(num_coletas):
             if espacos_vazios:
                 r, c = random.choice(espacos_vazios)
                 grade[r][c] = 'C'
@@ -648,7 +656,7 @@ class LabirintoBusca:
                     custo_melhor_exec = custo_atual
                     melhor_exec = atual[:]
 
-                curva_exec.append(custo_melhor_exec)
+                curva_exec.append(custo_atual)
 
                 T *= alpha
                 t += 1
@@ -695,6 +703,11 @@ class LabirintoBusca:
         custo_real = 0.0
         num_replanejamentos = 0
         plano: List[Estado] = []
+        frames: List[Tuple[Estado, list]] = []
+
+        def snapshot():
+            """Congela a posição atual e o que o agente já conhece do mapa."""
+            frames.append((posicao, [row[:] for row in mapa_interno]))
 
         def perceber(pos: Estado) -> bool:
             """Revela células dentro do raio de percepção (vizinhança Manhattan)."""
@@ -750,6 +763,7 @@ class LabirintoBusca:
 
         for _ in range(max_passos):
             nova_info = perceber(posicao)
+            snapshot()  # registra o estado já com a percepção desta posição
 
             if posicao == self.objetivo:
                 break
@@ -782,7 +796,8 @@ class LabirintoBusca:
             num_replanejamentos=num_replanejamentos,
             tempo_execucao=time.perf_counter() - t_inicio,
             custo_otimo_offline=custo_otimo,
-            mapa_final_interno=mapa_interno
+            mapa_final_interno=mapa_interno,
+            frames=frames
         )
 
 
@@ -920,6 +935,157 @@ def imprimir_mapa_interno(lab: LabirintoBusca, resultado: ResultadoBuscaOnline):
     print()
 
 
+def _render_frame_texto(
+    lab: LabirintoBusca,
+    pos: Estado,
+    mapa: list,
+    traj_set: Set[Estado]
+) -> str:
+    """Monta a string de um único frame da trajetória online.
+
+    Legenda: @ agente | * trajetória | ? desconhecido | # parede | A B C."""
+    coletas = set(lab.coletas)
+    linhas = []
+    for i in range(lab.altura):
+        linha = []
+        for j in range(lab.largura):
+            estado = (i, j)
+            celula = mapa[i][j]
+            if estado == pos:
+                linha.append('@')
+            elif celula is None:
+                linha.append('?')
+            elif celula is True:
+                linha.append('#')
+            elif estado == lab.inicio:
+                linha.append('A')
+            elif estado == lab.objetivo:
+                linha.append('B')
+            elif estado in coletas:
+                linha.append('C')
+            elif estado in traj_set:
+                linha.append('*')
+            else:
+                linha.append(' ')
+        linhas.append(''.join(linha))
+    return '\n'.join(linhas)
+
+
+def animar_trajetoria_online(
+    resultado: ResultadoBuscaOnline,
+    lab: LabirintoBusca,
+    delay: float = 0.15
+):
+    """Reproduz no terminal, passo a passo, o avanço do agente enquanto
+    descobre o mapa. Cada frame mostra a posição atual (@), a trajetória já
+    percorrida (*) e o que o agente ainda não viu (?)."""
+    frames = resultado.frames
+    if not frames:
+        print('  (sem frames para animar)')
+        return
+
+    total = len(frames)
+    trajetoria = resultado.trajetoria
+
+    for k, (pos, mapa) in enumerate(frames):
+        traj_set = set(trajetoria[:k + 1])
+        # \033[H = cursor para o topo; \033[J = limpa daqui para baixo.
+        print('\033[H\033[J', end='')
+        print(f'  Trajetória online — passo {k + 1}/{total}'
+              f'   (posição {pos})')
+        print(_render_frame_texto(lab, pos, mapa, traj_set))
+        print('\n  @ agente   * trajetória   ? desconhecido   # parede')
+        time.sleep(delay)
+
+    print(f'\n  Animação concluída — {total} passos, '
+          f'{"objetivo alcançado" if resultado.encontrado else "objetivo NÃO alcançado"}.')
+
+
+def exportar_animacao_online(
+    resultado: ResultadoBuscaOnline,
+    lab: LabirintoBusca,
+    filename: str = 'trajetoria_online.gif',
+    fps: int = 8
+):
+    frames = resultado.frames
+    if not frames:
+        print('  (sem frames para exportar)')
+        return
+
+    try:
+        import matplotlib.pyplot as plt
+        from matplotlib.animation import FuncAnimation, PillowWriter
+        from matplotlib.colors import ListedColormap
+        import matplotlib.patches as mpatches
+    except ImportError:
+        print('  [Aviso] matplotlib não instalado. Execute: pip install matplotlib pillow')
+        return
+
+    # Códigos de categoria usados na grade numérica de cada frame.
+    DESCONHECIDO, PAREDE, LIVRE, TRAJETO, COLETA, INICIO, OBJETIVO, AGENTE = range(8)
+    cores = ['#1a1a1a', '#777777', '#ffffff', '#7fb3ff',
+             '#ff9f1c', '#2ec27e', '#ffd60a', '#e63946']
+    rotulos = ['Desconhecido', 'Parede', 'Livre', 'Trajetória',
+               'Coleta (C)', 'Início (A)', 'Objetivo (B)', 'Agente']
+    cmap = ListedColormap(cores)
+
+    coletas = set(lab.coletas)
+    trajetoria = resultado.trajetoria
+
+    def grade_do_frame(k: int):
+        pos, mapa = frames[k]
+        traj_set = set(trajetoria[:k + 1])
+        g = [[DESCONHECIDO] * lab.largura for _ in range(lab.altura)]
+        for i in range(lab.altura):
+            for j in range(lab.largura):
+                estado = (i, j)
+                celula = mapa[i][j]
+                if estado == pos:
+                    g[i][j] = AGENTE
+                elif celula is None:
+                    g[i][j] = DESCONHECIDO
+                elif celula is True:
+                    g[i][j] = PAREDE
+                elif estado == lab.inicio:
+                    g[i][j] = INICIO
+                elif estado == lab.objetivo:
+                    g[i][j] = OBJETIVO
+                elif estado in coletas:
+                    g[i][j] = COLETA
+                elif estado in traj_set:
+                    g[i][j] = TRAJETO
+                else:
+                    g[i][j] = LIVRE
+        return g
+
+    fig, ax = plt.subplots(figsize=(lab.largura / 2.2, lab.altura / 2.2))
+    im = ax.imshow(grade_do_frame(0), cmap=cmap, vmin=0, vmax=7)
+    titulo = ax.set_title('')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.legend(
+        handles=[mpatches.Patch(color=cores[i], label=rotulos[i]) for i in range(8)],
+        loc='center left', bbox_to_anchor=(1.01, 0.5), fontsize=8, frameon=False
+    )
+    fig.tight_layout()
+
+    total = len(frames)
+
+    def atualizar(k: int):
+        im.set_data(grade_do_frame(k))
+        titulo.set_text(f'Trajetória online — passo {k + 1}/{total}')
+        return [im, titulo]
+
+    anim = FuncAnimation(fig, atualizar, frames=total, interval=1000 / fps, blit=False)
+    try:
+        anim.save(filename, writer=PillowWriter(fps=fps))
+        print(f'  [OK] Animação salva em: {filename}')
+    except Exception as e:
+        print(f'  [Erro] Não foi possível salvar o GIF ({e}). Instale Pillow: pip install pillow')
+    finally:
+        plt.close(fig)
+
+
 def imprimir_metricas_online(resultado: ResultadoBuscaOnline):
     razao = resultado.razao_online_offline
     razao_str = f'{razao:.3f}' if not math.isinf(razao) else 'inf'
@@ -935,6 +1101,138 @@ def imprimir_metricas_online(resultado: ResultadoBuscaOnline):
     print(f'Replanejamentos      : {resultado.num_replanejamentos}')
     print(f'Tempo de execução    : {resultado.tempo_execucao * 1000:.3f} ms')
 
+
+
+def exportar_csv_busca_classica(
+    lab: LabirintoBusca,
+    filename: str = 'resultados_busca_classica.csv'
+):
+    """Roda todos os algoritmos de busca clássica no labirinto e grava as
+    métricas obrigatórias (seção 5.3 do enunciado) em um arquivo .csv."""
+    algoritmos = [
+        lab.busca_largura,
+        lab.busca_profundidade,
+        lab.busca_custo_uniforme,
+        lab.busca_gulosa,
+        lab.busca_astar,
+        lambda: lab.busca_weighted_astar(peso=2.0),
+        lab.busca_idastar,
+    ]
+    colunas = [
+        'Algoritmo', 'Sucesso', 'Custo', 'Tamanho_Caminho',
+        'Nos_Explorados', 'Nos_Expandidos', 'Max_Fronteira', 'Tempo_ms'
+    ]
+    with open(filename, 'w', newline='', encoding='utf-8') as f:
+        escritor = csv.writer(f)
+        escritor.writerow(colunas)
+        for executar in algoritmos:
+            r = executar()
+            escritor.writerow([
+                r.algoritmo,
+                'sim' if r.encontrado else 'nao',
+                f'{r.custo_caminho:.1f}',
+                r.tamanho_caminho if r.encontrado else '',
+                r.nos_explorados,
+                r.nos_expandidos,
+                r.max_fronteira,
+                f'{r.tempo_execucao * 1000:.3f}',
+            ])
+    print(f'  [OK] Métricas da busca clássica salvas em: {filename}')
+
+
+def exportar_csv_busca_local(
+    lab: LabirintoBusca,
+    filename: str = 'resultados_busca_local.csv',
+    num_reinicios: int = 20,
+    num_execucoes_sa: int = 5
+):
+    """Roda Hill-Climbing e Simulated Annealing e grava as métricas
+    obrigatórias da busca local (seção 6.5) em um arquivo .csv."""
+    if not lab.coletas:
+        print('  [Aviso] Labirinto sem pontos de coleta C — busca local não se aplica.')
+        return
+    resultados = [
+        lab.hill_climbing(num_reinicializacoes=num_reinicios),
+        lab.simulated_annealing(num_execucoes=num_execucoes_sa),
+    ]
+    colunas = [
+        'Algoritmo', 'Melhor_Custo', 'Pior_Custo', 'Custo_Medio',
+        'Total_Iteracoes', 'Num_Execucoes', 'Taxa_Sucesso', 'Tempo_ms'
+    ]
+    with open(filename, 'w', newline='', encoding='utf-8') as f:
+        escritor = csv.writer(f)
+        escritor.writerow(colunas)
+        for r in resultados:
+            escritor.writerow([
+                r.algoritmo,
+                f'{r.melhor_custo:.1f}',
+                f'{r.pior_custo:.1f}',
+                f'{r.custo_medio:.1f}',
+                r.total_iteracoes,
+                r.num_execucoes,
+                f'{r.taxa_sucesso:.3f}',
+                f'{r.tempo_execucao * 1000:.3f}',
+            ])
+    print(f'  [OK] Métricas da busca local salvas em: {filename}')
+
+
+def exportar_csv_busca_online(
+    lab: LabirintoBusca,
+    filename: str = 'resultados_busca_online.csv',
+    raio_percepcao: int = 1
+):
+    """Roda a busca online e grava as métricas obrigatórias (seção 7.4),
+    incluindo a razão online/offline, em um arquivo .csv."""
+    r = lab.busca_online(raio_percepcao=raio_percepcao)
+    razao = r.razao_online_offline
+    razao_str = f'{razao:.3f}' if not math.isinf(razao) else 'inf'
+    colunas = [
+        'Algoritmo', 'Sucesso', 'Total_Movimentos', 'Custo_Real',
+        'Custo_Otimo_Offline', 'Razao_Online_Offline', 'Celulas_Reveladas',
+        'Celulas_Revisitadas', 'Replanejamentos', 'Tempo_ms'
+    ]
+    with open(filename, 'w', newline='', encoding='utf-8') as f:
+        escritor = csv.writer(f)
+        escritor.writerow(colunas)
+        escritor.writerow([
+            r.algoritmo,
+            'sim' if r.encontrado else 'nao',
+            r.total_movimentos,
+            f'{r.custo_real:.1f}',
+            f'{r.custo_otimo_offline:.1f}',
+            razao_str,
+            r.celulas_reveladas,
+            r.celulas_revisitadas,
+            r.num_replanejamentos,
+            f'{r.tempo_execucao * 1000:.3f}',
+        ])
+    print(f'  [OK] Métricas da busca online salvas em: {filename}')
+
+
+def _menu_visualizacao_online(lab: LabirintoBusca, resultado: ResultadoBuscaOnline):
+    """Oferece a visualização da trajetória online passo a passo:
+    animação ao vivo no terminal e/ou exportação de GIF para o relatório."""
+    if not resultado.frames:
+        return
+
+    print('\n─── Visualização da trajetória online (passo a passo) ───')
+    print('1 - Assistir animação no terminal')
+    print('2 - Exportar animação como GIF (matplotlib)')
+    print('3 - Ambos')
+    print('Enter - Pular')
+    escolha = input('Escolha [1/2/3 ou Enter]: ').strip()
+
+    if escolha in ('1', '3'):
+        d = input('Atraso entre passos em segundos (padrão 0.15): ').strip()
+        try:
+            delay = float(d) if d else 0.15
+        except ValueError:
+            delay = 0.15
+        animar_trajetoria_online(resultado, lab, delay=delay)
+
+    if escolha in ('2', '3'):
+        nome = input('Nome do arquivo (padrão trajetoria_online.gif): ').strip()
+        exportar_animacao_online(resultado, lab, filename=nome or 'trajetoria_online.gif')
 
 
 def menu_principal():
@@ -960,6 +1258,8 @@ def menu_principal():
         imprimir_labirinto(lab, resultado=resultado_online, mostrar_explorados=False)
         print('Mapa interno final do agente (? = nunca visto):')
         imprimir_mapa_interno(lab, resultado_online)
+        # A animação no terminal limpa a tela, então mostramos as métricas por último.
+        _menu_visualizacao_online(lab, resultado_online)
         imprimir_metricas_online(resultado_online)
         return
 
@@ -994,9 +1294,11 @@ def menu_principal():
         print('9 - Simulated Annealing')
         print('─── Busca Online ────────────────────')
         print('10 - Busca Online (Replanning com A*)')
+        print('─── Experimentos ────────────────────')
+        print('11 - Exportar todas as métricas para CSV')
         print('─────────────────────────────────────')
 
-        opcao = input('Digite a opção desejada [1-10]: ').strip()
+        opcao = input('Digite a opção desejada [1-11]: ').strip()
 
         if opcao in ('1', '2', '3', '4', '5', '6', '7'):
             if opcao == '1':
@@ -1044,7 +1346,19 @@ def menu_principal():
             imprimir_labirinto(lab, resultado=resultado_online, mostrar_explorados=False)
             print('Mapa interno final do agente (? = nunca visto):')
             imprimir_mapa_interno(lab, resultado_online)
+            # A animação no terminal limpa a tela, então mostramos as métricas por último.
+            _menu_visualizacao_online(lab, resultado_online)
             imprimir_metricas_online(resultado_online)
+
+        elif opcao == '11':
+            print('\n[Experimentos] Rodando algoritmos e gerando arquivos .csv...')
+            exportar_csv_busca_classica(lab)
+            if lab.coletas:
+                exportar_csv_busca_local(lab)
+            else:
+                print('  [Info] Sem pontos de coleta C — CSV de busca local não gerado.')
+            exportar_csv_busca_online(lab)
+            print('\n[OK] Arquivos .csv gerados na pasta atual.')
 
         else:
             print('\n[Erro] Opção inválida. Reinicie o programa.')
