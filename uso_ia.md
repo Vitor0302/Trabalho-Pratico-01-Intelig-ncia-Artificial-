@@ -21,21 +21,53 @@ resultados foram conduzidas e compreendidas pelo grupo.
 
 Exemplos representativos dos prompts feitos pelos integrantes do grupo:
 
-**Conceituais:**
+**Conceituais — Busca Clássica:**
 
 - "No A\*, quando há duas células livres igualmente boas, qual delas o agente
   escolhe primeiro?" (critério de desempate)
+- "A heurística de Manhattan é admissível neste domínio? Justifique."
+- "Qual a diferença prática entre UCS e BFS no nosso labirinto de custo
+  uniforme?"
+- "Em quais condições o DFS pode não encontrar solução mesmo ela existindo?"
+- "O que diferencia a busca gulosa do A\* em termos de otimalidade?"
+
+**Conceituais — Modelagem PEAS e Função de Desempenho:**
+
+- "O que caracteriza um agente baseado em objetivos com modelo interno? O
+  nosso agente se encaixa nessa categoria?"
+- "Faz sentido incluir movimentos inválidos na função de desempenho se o agente
+  nunca tenta um movimento inválido por design?"
+- "Como normalizar o tempo de execução (que é em segundos, valores muito
+  pequenos) para que ele contribua na mesma escala que o custo do caminho?"
+- "Por que penalizar a fronteira máxima em vez do tamanho médio da fronteira?"
+
+**Conceituais — Busca Local:**
+
+- "Qual a diferença entre um mínimo local e um platô no contexto do
+  Hill-Climbing?"
+- "Como os sideways moves ajudam a sair de platôs sem entrar em ciclos
+  infinitos?"
+- "Por que o Simulated Annealing pode aceitar uma solução pior que a atual?
+  Isso não atrapalha a convergência?"
+- "A temperatura inicial do SA deve ser proporcional ao custo do problema?
+  Por quê?"
+- "Se α (taxa de resfriamento) for muito próximo de 1, o que acontece com o
+  SA na prática?"
+- "Por que usar swap de dois pontos em vez de inverter um segmento inteiro
+  como operador de vizinhança?"
 - "A busca clássica e a busca online coletam os pontos `C` ou ignoram?"
+
+**Conceituais — Busca Online:**
+
 - "Por que o labirinto aleatório gerado por backtracking (perfect maze) sempre
   dá razão online/offline igual a 1?"
 - "O resultado `1.000` na razão é 1 ou 1000?" (notação decimal)
 - "Tem uma célula livre acima do agente, mas ele foi para a direita. Por quê?"
-- "A heurística de Manhattan é admissível neste domínio? Justifique."
+- "Como o mapa interno do agente online evolui ao longo dos passos?"
 
-**De código:**
+**De código (depuração):**
 
-- "Gere um mapa com ciclos que faça a razão online/offline ser maior que 1."
-- "Por que meu código da busca online está pulando passos?" (Seção 5)
+- "Por que meu código da busca online está pulando passos?" (Seção 6)
 
 ---
 
